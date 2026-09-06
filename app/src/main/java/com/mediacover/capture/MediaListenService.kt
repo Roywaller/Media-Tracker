@@ -7,33 +7,103 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.media.session.MediaController
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
-import android.provider.MediaStore
 import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
 import androidx.preference.PreferenceManager
 import com.google.gson.Gson
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
-import java.io.InputStream
 import java.util.concurrent.Executors
 
 class MediaListenService : android.app.Service() {
+    companion object {
+        const val ACTION_TRACK_CHANGE = "com.mediacover.capture.TRACK_CHANGED"
+        const val NOTIFICATION_ID = 1001
+        const val CHANNEL_ID = "mediacover_capture"
+    }
+
     private lateinit var sessionManager: MediaSessionManager
-    private var currentController: MediaController? = null
     private var lastTrack: TrackInfo? = null
+    private val pool = Executors.newSingleThreadExecutor()
     private val gson = Gson()
-    private val client = OkHttpClient()
-    private val ioPool = Executors.newSingleThreadExecutor()
+
+    private val sessionListener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
+        pool.submit { pollSession(controllers) }
+    }
+
+    private fun pollSession(controllers: MutableList<MediaController>?) {
+        controllers ?: return
+        val playing = controllers.firstOrNull {
+            it.playbackState?.state == PlaybackState.STATE_PLAYING
+        } ?: return
+
+        val meta = playing.metadata ?: return
+        val title = meta.getString(android.media.MediaMetadata.METADATA_KEY_TITLE)
+        val artist = meta.getString(android.media.MediaMetadata.METADATA_KEY_ARTIST)
+        val album = meta.getString(android.media.MediaMetadata.METADATA_KEY_ALBUM)
+        val bitmap = meta.getBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART)
+
+        val current = TrackInfo(title,artist,album)
+        if(current == lastTrack) return
+        lastTrack = current
+
+        saveFiles(current,bitmap)
+
+        val broadcast = Intent(ACTION_TRACK_CHANGE)
+        sendBroadcast(broadcast)
+    }
+
+    private fun saveFiles(info: TrackInfo, bitmap: Bitmap?) {
+        val pref = PreferenceManager.getDefaultSharedPreferences(this)
+        val uriStr = pref.getString("save_uri",null)
+
+        if(uriStr.isNullOrEmpty()){
+            val dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val jsonFile = File(dl,"now_track.json")
+            val imgFile = File(dl,"now_cover.jpg")
+            jsonFile.writeText(gson.toJson(info))
+            bitmap?.let { b ->
+                FileOutputStream(imgFile).use { out -> b.compress(Bitmap.CompressFormat.JPEG,90,out) }
+            }
+        }else{
+            val treeUri = Uri.parse(uriStr)
+            val root = DocumentFile.fromTreeUri(this,treeUri) ?: return
+            root.findFile("now_track.json")?.delete()
+            root.findFile("now_cover.jpg")?.delete()
+            val jsonDoc = root.createFile("application/json","now_track.json")
+            jsonDoc?.uri?.let { uri ->
+                contentResolver.openOutputStream(uri)?.write(gson.toJson(info).toByteArray())
+            }
+            bitmap?.let { b ->
+                val imgDoc = root.createFile("image/jpeg","now_cover.jpg")
+                imgDoc?.uri?.let { u ->
+                    contentResolver.openOutputStream(u)?.use { o -> b.compress(Bitmap.CompressFormat.JPEG,90,o) }
+                }
+            }
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        createChannel()
+        startForeground(NOTIFICATION_ID, buildNotification())
+        sessionManager = getSystemService(Context.MEDIA_SESSION_SERVICE) as MediaSessionManager
+        val pi = PendingIntent.getActivity(this,0,Intent(),PendingIntent.FLAG_IMMUTABLE)
+        sessionManager.addOnActiveSessionsChangedListener(sessionListener,pi)
+    }
+
+    private fun createChannel(){
+        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O){
+            val ch = NotificationChannel(CHANNEL_ID,"封面监听服务",NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+    
 
     companion object{
         const val ACTION_TRACK_CHANGED = "com.mediacover.capture.TRACK_CHANGED"
