@@ -3,8 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp"
-    android:gap="16dp">
+    android:padding="24dp">
 
     <TextView
         android:id="@+id/tv_path"
@@ -16,18 +15,21 @@
         android:id="@+id/btn_select_dir"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:text="选择保存文件夹"/>
 
     <Button
         android:id="@+id/btn_start"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:text="启动监听服务"/>
 
     <Button
         android:id="@+id/btn_stop"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="16dp"
         android:text="停止监听服务"/>
 
 </LinearLayout>
